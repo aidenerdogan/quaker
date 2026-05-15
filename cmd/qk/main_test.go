@@ -56,6 +56,26 @@ func TestRulesProtectCleanup(t *testing.T) {
 	}
 }
 
+func TestRulesProtectUninstall(t *testing.T) {
+	a := testApp(t)
+	appPath := filepath.Join(a.home, "Applications", "Demo.app")
+	if err := os.MkdirAll(appPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appPath, "Info.plist"), []byte("demo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.run([]string{"rules", "add", "protect", appPath}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.run([]string{"uninstall", "--apply", "Demo"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(appPath); err != nil {
+		t.Fatalf("protected app was removed: %v", err)
+	}
+}
+
 func TestRulesRemoveByID(t *testing.T) {
 	a := testApp(t)
 	protected := filepath.Join(a.home, "keep")
@@ -77,6 +97,43 @@ func TestRulesRemoveByID(t *testing.T) {
 	}
 	if len(rules.Protected) != 0 || len(rules.Ignored) != 0 {
 		t.Fatalf("rules were not removed by id: %#v", rules)
+	}
+}
+
+func TestScheduleRejectsUnsafeProfileName(t *testing.T) {
+	a := testApp(t)
+	if err := a.run([]string{"schedule", "add", "weekly-scan", "--profile", "../escape"}); err == nil {
+		t.Fatal("expected unsafe profile name to fail")
+	}
+}
+
+func TestLaunchdPlistEscapesXML(t *testing.T) {
+	plist := launchdPlist("weekly-scan-safe", `/tmp/qk&tool`, `safe"profile`)
+	if strings.Contains(plist, `/tmp/qk&tool`) || strings.Contains(plist, `safe"profile`) {
+		t.Fatalf("plist did not escape XML: %s", plist)
+	}
+	if !strings.Contains(plist, `/tmp/qk&amp;tool`) || !strings.Contains(plist, `safe&quot;profile`) {
+		t.Fatalf("plist missing escaped values: %s", plist)
+	}
+}
+
+func TestHooksRejectUnsupportedEventAndNonExecutable(t *testing.T) {
+	a := testApp(t)
+	script := filepath.Join(a.home, "hook.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.run([]string{"hooks", "install", "../../escape", script}); err == nil {
+		t.Fatal("expected unsupported event to fail")
+	}
+	if err := a.run([]string{"hooks", "install", "after-doctor", script}); err == nil {
+		t.Fatal("expected non-executable script to fail")
+	}
+	if err := os.Chmod(script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.run([]string{"hooks", "install", "after-doctor", script}); err != nil {
+		t.Fatal(err)
 	}
 }
 

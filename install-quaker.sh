@@ -29,7 +29,28 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+if [[ -z "$PREFIX" || "$PREFIX" == "/" ]]; then
+    echo "Refusing unsafe install prefix: $PREFIX" >&2
+    exit 1
+fi
+
+if [[ -z "$APP_DIR" || "$APP_DIR" == "/" ]]; then
+    echo "Refusing unsafe app directory: $APP_DIR" >&2
+    exit 1
+fi
+
+if [[ "$PREFIX" == -* || "$APP_DIR" == -* ]]; then
+    echo "Install paths must not start with '-'." >&2
+    exit 1
+fi
+
 mkdir -p "$PREFIX" "$APP_DIR"
+
+APP_DIR_REAL="$(cd "$APP_DIR" && pwd)"
+if [[ "$APP_DIR_REAL" == "$SCRIPT_DIR" ]]; then
+    echo "Refusing to install over the source checkout." >&2
+    exit 1
+fi
 
 if command -v go > /dev/null 2>&1; then
     (cd "$SCRIPT_DIR" && make build)

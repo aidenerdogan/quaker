@@ -464,6 +464,10 @@ func (a *app) finishCleanup(command string, args []string, dry, jsonOut bool, it
 	var total int64
 	var paths []string
 	for i := range items {
+		if skip, rule := a.protected(items[i].Path); skip {
+			items[i].Skip = true
+			items[i].Rule = rule
+		}
 		if items[i].Skip {
 			continue
 		}
@@ -1001,6 +1005,9 @@ func (a *app) scheduleCmd(args []string) error {
 		if len(args) < 4 || args[1] != "weekly-scan" || args[2] != "--profile" {
 			return fmt.Errorf("usage: qk schedule add weekly-scan --profile <name>")
 		}
+		if !safeIdentifier(args[3]) {
+			return fmt.Errorf("profile name must use only letters, numbers, dots, underscores, or hyphens")
+		}
 		id := "weekly-scan-" + args[3]
 		plist := launchdPlist(id, os.Args[0], args[3])
 		if err := os.MkdirAll(filepath.Join(a.home, "Library", "LaunchAgents"), 0o755); err != nil {
@@ -1017,6 +1024,9 @@ func (a *app) scheduleCmd(args []string) error {
 	case "remove":
 		if len(args) < 2 {
 			return fmt.Errorf("usage: qk schedule remove <id>")
+		}
+		if !safeIdentifier(args[1]) {
+			return fmt.Errorf("schedule id must use only letters, numbers, dots, underscores, or hyphens")
 		}
 		_ = os.Remove(filepath.Join(a.schedules, args[1]+".plist"))
 		_ = os.Remove(filepath.Join(a.home, "Library", "LaunchAgents", "com.quaker."+args[1]+".plist"))
@@ -1035,7 +1045,35 @@ func launchdPlist(id, bin, prof string) string {
 <key>ProgramArguments</key><array><string>%s</string><string>profile</string><string>run</string><string>%s</string><string>--dry-run</string></array>
 <key>StartCalendarInterval</key><dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>9</integer></dict>
 </dict></plist>
-`, id, bin, prof)
+`, xmlText(id), xmlText(bin), xmlText(prof))
+}
+
+func xmlText(value string) string {
+	return strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		`"`, "&quot;",
+		"'", "&apos;",
+	).Replace(value)
+}
+
+func safeIdentifier(value string) bool {
+	if value == "" || len(value) > 80 {
+		return false
+	}
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			continue
+		}
+		switch r {
+		case '.', '_', '-':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (a *app) hooksCmd(args []string) error {
@@ -1058,6 +1096,16 @@ func (a *app) hooksCmd(args []string) error {
 		if len(args) < 3 {
 			return fmt.Errorf("usage: qk hooks install <event> <script>")
 		}
+		if !allowedHookEvent(args[1]) {
+			return fmt.Errorf("unsupported hook event: %s", args[1])
+		}
+		info, err := os.Stat(args[2])
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || info.Mode()&0o111 == 0 {
+			return fmt.Errorf("hook script must be an executable file")
+		}
 		dir := filepath.Join(a.hooks, args[1])
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
@@ -1072,6 +1120,15 @@ func (a *app) hooksCmd(args []string) error {
 		return fmt.Errorf("usage: qk hooks list|install")
 	}
 	return nil
+}
+
+func allowedHookEvent(event string) bool {
+	switch event {
+	case "before-clean", "after-clean", "after-uninstall", "after-scan", "after-doctor":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *app) runHooks(event, id, command string) {
